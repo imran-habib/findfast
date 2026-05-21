@@ -252,6 +252,15 @@ class QuickFindGUI:
         self._dup_selected = set()  # set of item IDs marked for deletion
         self._dup_groups = []
 
+        # Right-click context menu for duplicates
+        self.dup_context_menu = Menu(self.root, tearoff=0)
+        self.dup_context_menu.add_command(label="Delete This File", command=self._delete_single_dup)
+        self.dup_context_menu.add_command(label="Open File", command=self._open_dup_file)
+        self.dup_context_menu.add_command(label="Open Folder", command=self._open_dup_folder)
+        self.dup_context_menu.add_separator()
+        self.dup_context_menu.add_command(label="Copy Path", command=self._copy_dup_path)
+        self.dup_tree.bind("<Button-3>", self._show_dup_context_menu)
+
         # Right-click context menu
         self.context_menu = Menu(self.root, tearoff=0)
         self.context_menu.add_command(label="Open File", command=self._open_file)
@@ -692,6 +701,57 @@ class QuickFindGUI:
                 self.dup_tree.delete(group_id)
 
         self.dup_status_var.set(f"Deleted {deleted} files" + (f", {failed} failed" if failed else ""))
+
+    def _show_dup_context_menu(self, event):
+        item = self.dup_tree.identify_row(event.y)
+        if item and self.dup_tree.parent(item):  # only on file items, not group headers
+            self.dup_tree.selection_set(item)
+            self.dup_context_menu.post(event.x_root, event.y_root)
+
+    def _get_dup_selected_path(self) -> str:
+        item = self.dup_tree.selection()
+        if not item:
+            return ""
+        return str(self.dup_tree.set(item[0], "path"))
+
+    def _delete_single_dup(self):
+        path = self._get_dup_selected_path()
+        if not path:
+            return
+        from tkinter import messagebox
+        if not messagebox.askyesno("Delete", f"Delete this file?\n\n{path}"):
+            return
+        try:
+            os.remove(path)
+            item = self.dup_tree.selection()[0]
+            self.dup_tree.delete(item)
+            self._dup_selected.discard(item)
+            self.dup_status_var.set(f"Deleted: {os.path.basename(path)}")
+        except OSError as e:
+            messagebox.showerror("Error", f"Could not delete:\n{e}")
+
+    def _open_dup_file(self):
+        path = self._get_dup_selected_path()
+        if path and os.path.exists(path):
+            if os.name == "nt":
+                os.startfile(path)
+            else:
+                subprocess.Popen(["xdg-open", path])
+
+    def _open_dup_folder(self):
+        path = self._get_dup_selected_path()
+        if path:
+            folder = os.path.dirname(path)
+            if os.name == "nt":
+                subprocess.Popen(["explorer", "/select,", path])
+            else:
+                subprocess.Popen(["xdg-open", folder])
+
+    def _copy_dup_path(self):
+        path = self._get_dup_selected_path()
+        if path:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(path)
 
     def _on_search_btn(self):
         self._on_search()

@@ -12,6 +12,35 @@ from typing import Callable, List, Optional
 
 from indexer import DEFAULT_DB, get_db
 
+# Extensions to skip - system/critical files that should never be deleted
+SKIP_EXTENSIONS = {
+    # System
+    ".dll", ".sys", ".drv", ".ocx", ".cpl", ".scr",
+    ".dat", ".bin", ".cat", ".mum", ".mof", ".nls",
+    # Registry/config
+    ".reg", ".inf", ".ini",
+    # Database/cache
+    ".db", ".sqlite", ".ldf", ".mdf",
+    # Logs (usually unique despite same size)
+    ".log", ".etl", ".evtx",
+    # Certificates/security
+    ".cer", ".crt", ".pfx", ".key",
+    # Package/manifest
+    ".manifest", ".mui", ".tlb",
+    # Virtual memory / system
+    ".swp", ".dmp", ".hdmp",
+}
+
+# Paths to skip entirely
+SKIP_PATHS = {
+    "Windows", "System32", "SysWOW64", "WinSxS", "assembly",
+    "Program Files", "Program Files (x86)", "ProgramData",
+    "$Recycle.Bin", "System Volume Information",
+    # Linux system
+    "/usr/lib", "/usr/bin", "/usr/share", "/lib", "/sbin",
+    "/proc", "/sys", "/dev", "/run",
+}
+
 
 @dataclass
 class DuplicateGroup:
@@ -22,6 +51,15 @@ class DuplicateGroup:
     @property
     def wasted_bytes(self) -> int:
         return self.size * (len(self.files) - 1)
+
+
+def _is_system_path(filepath: str) -> bool:
+    """Check if a file is in a system/protected directory."""
+    path_parts = filepath.replace("\\", "/").split("/")
+    for part in path_parts:
+        if part in SKIP_PATHS:
+            return True
+    return False
 
 
 def file_hash(filepath: str) -> Optional[str]:
@@ -74,6 +112,13 @@ def find_duplicates(
         if scan_paths:
             if not any(path.startswith(p) for p in scan_paths):
                 continue
+        # Skip system extensions
+        ext = os.path.splitext(path)[1].lower()
+        if ext in SKIP_EXTENSIONS:
+            continue
+        # Skip system paths
+        if _is_system_path(path):
+            continue
         size_groups[size].append(path)
 
     # Filter to only groups with 2+ files (potential duplicates)
