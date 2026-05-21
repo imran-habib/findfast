@@ -230,15 +230,15 @@ class QuickFindGUI:
 
         # Duplicates treeview with checkboxes
         dup_cols = ("select", "name", "size", "path")
-        self.dup_tree = ttk.Treeview(dup_tab, columns=dup_cols, show="tree headings")
+        self.dup_tree = ttk.Treeview(dup_tab, columns=dup_cols, show="tree headings", selectmode="extended")
         self.dup_tree.heading("#0", text="")
         self.dup_tree.heading("select", text="✓")
         self.dup_tree.heading("name", text="Name")
         self.dup_tree.heading("size", text="Size")
         self.dup_tree.heading("path", text="Path")
-        self.dup_tree.column("#0", width=30)
+        self.dup_tree.column("#0", width=20)
         self.dup_tree.column("select", width=30, anchor=tk.CENTER)
-        self.dup_tree.column("name", width=200)
+        self.dup_tree.column("name", width=250)
         self.dup_tree.column("size", width=80, anchor=tk.E)
         self.dup_tree.column("path", width=400)
 
@@ -247,9 +247,10 @@ class QuickFindGUI:
         self.dup_tree.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
         dup_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # Click to toggle selection
+        # Click to toggle checkbox, double-click to auto-fit columns
         self.dup_tree.bind("<ButtonRelease-1>", self._toggle_dup_select)
-        self._dup_selected = set()  # set of item IDs marked for deletion
+        self.dup_tree.bind("<Double-1>", self._dup_tree_double_click)
+        self._dup_selected = set()
         self._dup_groups = []
 
         # Right-click context menu for duplicates
@@ -634,7 +635,7 @@ class QuickFindGUI:
                         f"Wasted: {format_size(group.wasted_bytes)}"))
             # Child nodes for each file
             for j, filepath in enumerate(group.files):
-                item_id = self.dup_tree.insert(group_id, tk.END, text="",
+                item_id = self.dup_tree.insert(group_id, tk.END, text=os.path.basename(filepath),
                     values=("☐", os.path.basename(filepath), format_size(group.size), filepath))
 
         self.scan_dup_btn.config(state=tk.NORMAL)
@@ -715,21 +716,64 @@ class QuickFindGUI:
             return ""
         return str(self.dup_tree.set(item[0], "path"))
 
+    def _dup_tree_double_click(self, event):
+        """Auto-fit column on separator double-click."""
+        region = self.dup_tree.identify_region(event.x, event.y)
+        if region == "separator":
+            col = self.dup_tree.identify_column(event.x)
+            col_idx = int(col.replace("#", "")) - 1
+            cols = list(self.dup_tree["columns"])
+            if 0 <= col_idx < len(cols):
+                col_id = cols[col_idx]
+                max_width = max(
+                    (len(str(self.dup_tree.set(row, col_id))) for row in self._get_all_dup_items()),
+                    default=5
+                ) * 8 + 20
+                self.dup_tree.column(col_id, width=max(max_width, 50))
+
+    def _get_all_dup_items(self):
+        """Get all child items (files, not group headers)."""
+        items = []
+        for group_id in self.dup_tree.get_children(""):
+            items.extend(self.dup_tree.get_children(group_id))
+        return items
+
     def _delete_single_dup(self):
-        path = self._get_dup_selected_path()
-        if not path:
+        """Delete highlighted/selected files (supports multi-select)."""
+        items = self.dup_tree.selection()
+        if not items:
             return
+
+        # Filter to only file items (not group headers)
+        file_items = [i for i in items if self.dup_tree.parent(i)]
+        if not file_items:
+            return
+
         from tkinter import messagebox
-        if not messagebox.askyesno("Delete", f"Delete this file?\n\n{path}"):
+        paths = [self.dup_tree.set(item, "path") for item in file_items]
+
+        msg = f"Delete {len(paths)} file(s)?\n\n"
+        msg += "\n".join(os.path.basename(p) for p in paths[:10])
+        if len(paths) > 10:
+            msg += f"\n... and {len(paths) - 10} more"
+        msg += "\n\nThis cannot be undone."
+
+        if not messagebox.askyesno("Delete", msg):
             return
-        try:
-            os.remove(path)
-            item = self.dup_tree.selection()[0]
-            self.dup_tree.delete(item)
+
+        from duplicates import delete_files
+        deleted, failed = delete_files(paths)
+
+        for item in file_items:
             self._dup_selected.discard(item)
-            self.dup_status_var.set(f"Deleted: {os.path.basename(path)}")
-        except OSError as e:
-            messagebox.showerror("Error", f"Could not delete:\n{e}")
+            self.dup_tree.delete(item)
+
+        # Remove empty groups
+        for group_id in list(self.dup_tree.get_children("")):
+            if len(self.dup_tree.get_children(group_id)) <= 1:
+                self.dup_tree.delete(group_id)
+
+        self.dup_status_var.set(f"Deleted {deleted} files" + (f", {failed} failed" if failed else ""))
 
     def _open_dup_file(self):
         path = self._get_dup_selected_path()
