@@ -260,6 +260,7 @@ class QuickFindGUI:
         self.dup_context_menu.add_separator()
         self.dup_context_menu.add_command(label="Copy Path", command=self._copy_dup_path)
         self.dup_tree.bind("<Button-3>", self._show_dup_context_menu)
+        self.dup_tree.bind("<Delete>", lambda e: self._delete_single_dup())
 
         # Right-click context menu
         self.context_menu = Menu(self.root, tearoff=0)
