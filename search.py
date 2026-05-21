@@ -86,11 +86,19 @@ def search(
     results = []
 
     if use_regex:
+        # Convert common glob patterns to regex
+        regex_query = query
+        if not any(c in query for c in ('(', '[', '{', '\\', '^', '$', '+')):
+            # Looks like a glob, convert: * -> .*, ? -> .
+            regex_query = query.replace('.', r'\.').replace('*', '.*').replace('?', '.')
+            if not regex_query.startswith('.*'):
+                regex_query = '.*' + regex_query
+
         rows = conn.execute(
             "SELECT name, path, ext, size, modified, is_dir FROM files"
         ).fetchall()
         try:
-            pattern = re.compile(query, re.IGNORECASE)
+            pattern = re.compile(regex_query, re.IGNORECASE)
         except re.error as e:
             return {"results": [], "count": 0, "error": f"Invalid regex: {e}"}
         for row in rows:
