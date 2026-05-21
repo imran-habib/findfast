@@ -118,15 +118,6 @@ class QuickFindGUI:
         ttk.Entry(filters, textvariable=self.ext_var, width=8).pack(side=tk.LEFT, padx=(2, 10))
         self.ext_var.trace_add("write", self._on_search)
 
-        ttk.Label(filters, text="Sort:").pack(side=tk.LEFT, padx=(5, 0))
-        self.sort_var = tk.StringVar(value="relevance")
-        sort_combo = ttk.Combobox(filters, textvariable=self.sort_var, width=14, state="readonly",
-                                  values=["relevance", "name_asc", "name_desc",
-                                          "size_asc", "size_desc",
-                                          "modified_newest", "modified_oldest", "type"])
-        sort_combo.pack(side=tk.LEFT, padx=(2, 10))
-        sort_combo.bind("<<ComboboxSelected>>", self._on_search)
-
         ttk.Button(filters, text="Index Folder...", command=self._index_folder).pack(side=tk.RIGHT)
         ttk.Button(filters, text="Re-index", command=self._reindex).pack(side=tk.RIGHT, padx=5)
 
@@ -192,22 +183,27 @@ class QuickFindGUI:
         tree_frame = ttk.Frame(self.root, padding=(10, 5))
         tree_frame.pack(fill=tk.BOTH, expand=True)
 
-        cols = ("name", "size", "modified", "path")
+        cols = ("name", "type", "size", "modified", "path")
         self.tree = ttk.Treeview(tree_frame, columns=cols, show="headings")
         self.tree.heading("name", text="Name ↕", command=lambda: self._sort_column("name"))
+        self.tree.heading("type", text="Type ↕", command=lambda: self._sort_column("type"))
         self.tree.heading("size", text="Size ↕", command=lambda: self._sort_column("size"))
         self.tree.heading("modified", text="Modified ↕", command=lambda: self._sort_column("modified"))
         self.tree.heading("path", text="Path ↕", command=lambda: self._sort_column("path"))
         self.tree.column("name", width=220)
+        self.tree.column("type", width=60)
         self.tree.column("size", width=70, anchor=tk.E)
         self.tree.column("modified", width=130)
-        self.tree.column("path", width=400)
+        self.tree.column("path", width=350)
 
         scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar.set)
 
         self.tree.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Double-click on column separator to auto-fit width
+        self.tree.bind("<Double-1>", self._on_tree_double_click)
 
         # Right-click context menu
         self.context_menu = Menu(self.root, tearoff=0)
@@ -217,7 +213,6 @@ class QuickFindGUI:
         self.context_menu.add_command(label="Copy Path", command=self._copy_path)
 
         self.tree.bind("<Button-3>", self._show_context_menu)
-        self.tree.bind("<Double-1>", self._on_double_click)
 
         # Keyboard shortcuts
         self.root.bind("<Escape>", lambda e: self._minimize_to_tray())
@@ -293,6 +288,21 @@ class QuickFindGUI:
         self.entry.focus()
 
     # --- Column sorting ---
+    def _on_tree_double_click(self, event):
+        """Double-click: auto-fit column if on separator, open file if on row."""
+        region = self.tree.identify_region(event.x, event.y)
+        if region == "separator":
+            # Auto-fit column width
+            col = self.tree.identify_column(event.x)
+            col_id = self.tree["columns"][int(col.replace("#", "")) - 1]
+            max_width = max(
+                (len(str(self.tree.set(row, col_id))) for row in self.tree.get_children("")),
+                default=5
+            ) * 8 + 20  # approximate pixel width
+            self.tree.column(col_id, width=max(max_width, 50))
+        elif region == "cell":
+            self._open_file()
+
     def _sort_column(self, col):
         """Sort treeview by clicking column header."""
         reverse = self._sort_reverse.get(col, False)
@@ -319,7 +329,7 @@ class QuickFindGUI:
 
         self._sort_reverse[col] = not reverse
 
-        for c in ("name", "size", "modified", "path"):
+        for c in ("name", "type", "size", "modified", "path"):
             arrow = ""
             if c == col:
                 arrow = " ▼" if reverse else " ▲"
@@ -343,7 +353,7 @@ class QuickFindGUI:
             return ""
         values = self.tree.item(item[0])["values"]
         name = str(values[0]).replace("📁 ", "")
-        folder = str(values[3])
+        folder = str(values[4])
         return os.path.join(folder, name)
 
     def _open_file(self):
@@ -477,7 +487,6 @@ class QuickFindGUI:
             ext_filter=ext or None,
             files_only=self.files_only_var.get(),
             dirs_only=self.dirs_only_var.get(),
-            sort_by=self.sort_var.get(),
             min_size=min_size,
             max_size=max_size,
             modified_after=modified_after,
@@ -495,9 +504,10 @@ class QuickFindGUI:
         for r in result["results"]:
             icon = "📁 " if r.is_dir else ""
             size = "" if r.is_dir else format_size(r.size)
+            ftype = "Folder" if r.is_dir else (r.ext[1:].upper() if r.ext else "File")
             mod_date = datetime.fromtimestamp(r.modified).strftime("%Y-%m-%d %H:%M") if r.modified else ""
             self.tree.insert("", tk.END, values=(
-                f"{icon}{r.name}", size, mod_date, os.path.dirname(r.path)
+                f"{icon}{r.name}", ftype, size, mod_date, os.path.dirname(r.path)
             ))
 
         self._result_count = result["count"]
