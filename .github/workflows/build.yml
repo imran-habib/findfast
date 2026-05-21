@@ -24,11 +24,23 @@ jobs:
       - name: Build EXE
         run: pyinstaller --onefile --noconsole --name QuickFind --icon=quickfind.ico --add-data "quickfind.ico;." findfast.py
 
-      - name: Upload artifact
+      - name: Build Installer
+        run: |
+          choco install innosetup -y --no-progress
+          $env:TAG_VERSION = "${{ github.ref_name }}".TrimStart("v")
+          iscc /DTAG_VERSION="$env:TAG_VERSION" installer.iss
+
+      - name: Upload portable
         uses: actions/upload-artifact@v4
         with:
-          name: quickfind-windows
+          name: quickfind-windows-portable
           path: dist/QuickFind.exe
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: quickfind-windows-installer
+          path: installer/QuickFind-Setup.exe
 
   build-linux:
     runs-on: ubuntu-latest
@@ -43,22 +55,27 @@ jobs:
         run: pip install pyinstaller
 
       - name: Build binary
-        run: pyinstaller --onefile --name quickfind findfast.py
+        run: pyinstaller --onefile --name quickfind-linux findfast.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: quickfind-linux
-          path: dist/quickfind
+          path: dist/quickfind-linux
 
   release:
     needs: [build-windows, build-linux]
     runs-on: ubuntu-latest
     steps:
-      - name: Download Windows build
+      - name: Download Windows portable
         uses: actions/download-artifact@v4
         with:
-          name: quickfind-windows
+          name: quickfind-windows-portable
+
+      - name: Download Windows installer
+        uses: actions/download-artifact@v4
+        with:
+          name: quickfind-windows-installer
 
       - name: Download Linux build
         uses: actions/download-artifact@v4
@@ -70,4 +87,5 @@ jobs:
         with:
           files: |
             QuickFind.exe
-            quickfind
+            QuickFind-Setup.exe
+            quickfind-linux
