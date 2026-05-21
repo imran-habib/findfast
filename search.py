@@ -1,0 +1,164 @@
+"""
+Search engine - queries SQLite FTS5 for instant file search.
+"""
+import os
+import re
+import sqlite3
+import time
+from dataclasses import dataclass
+from typing import List, Optional
+
+from indexer import DEFAULT_DB, get_db
+
+
+@dataclass
+class SearchResult:
+    name: str
+    path: str
+    ext: str
+    size: int
+    modified: float
+    is_dir: bool
+
+
+def format_size(size: int) -> str:
+    """Human-readable file size."""
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024:
+            return f"{size:.1f} {unit}" if unit != "B" else f"{size} {unit}"
+        size /= 1024
+    return f"{size:.1f} PB"
+
+
+def search(
+    query: str,
+    db_path: str = DEFAULT_DB,
+    limit: int = 50,
+    ext_filter: Optional[str] = None,
+    min_size: Optional[int] = None,
+    max_size: Optional[int] = None,
+    dirs_only: bool = False,
+    files_only: bool = False,
+    path_filter: Optional[str] = None,
+    use_regex: bool = False,
+) -> dict:
+    """
+    Search indexed files.
+
+    Args:
+        query: Search query (supports FTS5 syntax: prefix*, "exact phrase")
+        db_path: Path to database
+        limit: Max results
+        ext_filter: Filter by extension (e.g., ".py", ".txt")
+        min_size: Minimum file size in bytes
+        max_size: Maximum file size in bytes
+        dirs_only: Only return directories
+        files_only: Only return files
+        path_filter: Filter results where path contains this string
+        use_regex: Treat query as regex instead of FTS
+
+    Returns:
+        Dict with results and timing info.
+    """
+    if not os.path.exists(db_path):
+        return {"results": [], "count": 0, "error": "No index found. Run: findfast index <path>"}
+
+    start = time.perf_counter()
+    conn = get_db(db_path)
+    conn.row_factory = sqlite3.Row
+
+    results = []
+
+    if use_regex:
+        # Regex search against the files table directly
+        rows = conn.execute(
+            "SELECT name, path, ext, size, modified, is_dir FROM files"
+        ).fetchall()
+        try:
+            pattern = re.compile(query, re.IGNORECASE)
+        except re.error as e:
+            return {"results": [], "count": 0, "error": f"Invalid regex: {e}"}
+        for row in rows:
+            if pattern.search(row["name"]) or pattern.search(row["path"]):
+                results.append(row)
+                if len(results) >= limit:
+                    break
+    elif query.strip() in ("*", ""):
+        # List all files (no FTS needed)
+        rows = conn.execute(
+            "SELECT name, path, ext, size, modified, is_dir FROM files LIMIT ?", (limit * 3,)
+        ).fetchall()
+        results = rows
+    else:
+        # FTS5 search — add * for prefix matching if no special syntax
+        fts_query = query
+        if not any(c in query for c in ('"', '*', 'OR', 'AND', 'NOT')):
+            # Auto prefix match: "foo" becomes "foo*"
+            terms = query.split()
+            fts_query = " ".join(f"{t}*" for t in terms)
+
+        try:
+            rows = conn.execute("""
+                SELECT f.name, f.path, f.ext, f.size, f.modified, f.is_dir
+                FROM files f
+                JOIN files_fts fts ON f.id = fts.rowid
+                WHERE files_fts MATCH ?
+                ORDER BY rank
+                LIMIT ?
+            """, (fts_query, limit * 3)).fetchall()  # fetch extra for post-filtering
+        except sqlite3.OperationalError as e:
+            return {"results": [], "count": 0, "error": f"Search error: {e}"}
+        results = rows
+
+    # Apply filters
+    filtered = []
+    for row in results:
+        if ext_filter and row["ext"] != ext_filter.lower():
+            continue
+        if min_size is not None and (row["size"] or 0) < min_size:
+            continue
+        if max_size is not None and (row["size"] or 0) > max_size:
+            continue
+        if dirs_only and not row["is_dir"]:
+            continue
+        if files_only and row["is_dir"]:
+            continue
+        if path_filter and path_filter.lower() not in row["path"].lower():
+            continue
+        filtered.append(SearchResult(
+            name=row["name"],
+            path=row["path"],
+            ext=row["ext"],
+            size=row["size"] or 0,
+            modified=row["modified"] or 0,
+            is_dir=bool(row["is_dir"]),
+        ))
+        if len(filtered) >= limit:
+            break
+
+    elapsed = time.perf_counter() - start
+
+    return {
+        "results": filtered,
+        "count": len(filtered),
+        "elapsed_ms": round(elapsed * 1000, 1),
+        "error": None,
+    }
+
+
+def get_stats(db_path: str = DEFAULT_DB) -> dict:
+    """Get index statistics."""
+    if not os.path.exists(db_path):
+        return {"error": "No index found."}
+    conn = get_db(db_path)
+    total = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+    files = conn.execute("SELECT COUNT(*) FROM files WHERE is_dir=0").fetchone()[0]
+    dirs = conn.execute("SELECT COUNT(*) FROM files WHERE is_dir=1").fetchone()[0]
+    db_size = os.path.getsize(db_path)
+    return {
+        "total_entries": total,
+        "files": files,
+        "directories": dirs,
+        "db_size": format_size(db_size),
+        "db_path": db_path,
+    }
