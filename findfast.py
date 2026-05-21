@@ -51,8 +51,12 @@ def cmd_index(args):
     """Index filesystem paths."""
     paths = args.paths or (["/"] if os.name != "nt" else ["C:\\"])
 
-    def progress(msg, count):
-        print(f"\r  {msg} ({count:,} files)", end="", flush=True)
+    def progress(msg, count, eta):
+        eta_str = ""
+        if eta > 0:
+            mins, secs = divmod(int(eta), 60)
+            eta_str = f" | ETA: {mins}m {secs}s" if mins else f" | ETA: {secs}s"
+        print(f"\r  {msg} ({count:,} files){eta_str}    ", end="", flush=True)
 
     print(f"Indexing: {', '.join(paths)}")
     result = index_paths(paths, db_path=args.db, num_workers=args.workers, callback=progress)
