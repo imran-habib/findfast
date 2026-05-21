@@ -10,15 +10,18 @@ Built in Python with SQLite FTS5 (full-text search) and concurrent filesystem cr
 - **GUI + CLI** — double-click for GUI, or use from terminal
 - **Concurrent indexing** — crawls filesystem in parallel using multiple threads
 - **Incremental re-index** — only scans new/modified files on subsequent runs
+- **Auto-indexes all drives** — detects and indexes all drives on first launch
 - **Background auto-reindex** — keeps index fresh every 5 minutes
 - **Cross-platform** — works on Windows and Linux
 - **Multiple search modes** — prefix, exact phrase, boolean (AND/OR/NOT), regex
 - **Filters** — extension, size, type (file/directory), date modified, path
-- **Sorting** — by name, size, date modified, type, or relevance
+- **Sortable columns** — click column headers to sort (Name, Type, Size, Modified, Path)
+- **Auto-fit columns** — double-click column separator to fit content
+- **Duplicate file finder** — scan, review, and bulk delete duplicate files
 - **System tray** — minimize to tray, keeps running in background
 - **Global hotkey** — `Ctrl+Shift+F` to summon from anywhere
-- **Dark/Light theme** — toggle with `Ctrl+T`
 - **Right-click menu** — Open file, Open folder, Copy path
+- **Keyboard shortcuts** — `Enter` to open, `Ctrl+C` to copy path, `Delete` to remove duplicates
 - **Remembers position** — window size/position saved between sessions
 - **Lightweight** — single SQLite file, minimal dependencies
 
@@ -50,7 +53,7 @@ Requires Python 3.7+.
 
 ### GUI (double-click)
 1. Run `QuickFind.exe` → GUI opens
-2. Click **"Index Folder..."** → select your drive/folder
+2. First launch automatically indexes all drives
 3. Start typing → instant results
 
 ### CLI
@@ -60,51 +63,11 @@ python quickfind.py search "report"
 python quickfind.py interactive
 ```
 
-## Usage (CLI)
+## Tabs
 
-```
-usage: quickfind [-h] [--db DB] {index,search,interactive,i,stats} ...
+### Search Tab
 
-QuickFind - Instant file search for Windows & Linux
-
-positional arguments:
-  {index,search,interactive,i,stats}
-    index               Index filesystem paths
-    search              Search indexed files
-    interactive (i)     Interactive search mode
-    stats               Show index statistics
-
-options:
-  -h, --help            show this help message and exit
-  --db DB               Database path (default: ~/.quickfind.db)
-```
-
-### index
-
-```bash
-quickfind index C:\ D:\              # Windows
-quickfind index /home /opt            # Linux
-quickfind index /home -w 8            # Use 8 workers
-```
-
-### search
-
-```bash
-quickfind search "report"
-quickfind search "test" --ext .py
-quickfind search "config" --dirs
-quickfind search "budget" --max 20
-quickfind search "^test_.*\.py$" --regex
-```
-
-### interactive
-
-```bash
-quickfind interactive
-quickfind i                           # shorthand
-```
-
-## GUI Features
+Real-time file search with filters:
 
 | Feature | How to use |
 |---------|-----------|
@@ -112,15 +75,29 @@ quickfind i                           # shorthand
 | Filter by extension | Type extension in filter box (e.g., `.py`) |
 | Filter by size | Select from Size dropdown |
 | Filter by date | Select from Modified dropdown |
-| Sort results | Select from Sort dropdown |
+| Sort results | Click any column header (toggles ▲/▼) |
+| Auto-fit column | Double-click column separator |
 | Files/Dirs only | Check the checkboxes |
-| Dark mode | Click 🌙 or press `Ctrl+T` |
+| Regex mode | Check "Regex" (supports globs like `*.png`) |
 | Open file | Double-click result |
 | Open folder | Right-click → Open Folder |
-| Copy path | Right-click → Copy Path |
-| Minimize to tray | Press `Escape` or View → Minimize to Tray |
-| Summon window | `Ctrl+Shift+F` (global hotkey) |
-| Re-index | Click "Re-index" button |
+| Copy path | Right-click → Copy Path or `Ctrl+C` |
+
+### Duplicates Tab
+
+Find and remove duplicate files:
+
+| Feature | How to use |
+|---------|-----------|
+| Scan | Click "Scan for Duplicates" |
+| Select duplicates | Click files to toggle ☐/☑ |
+| Select all copies | "Select All Except First" (keeps one copy) |
+| Delete selected | "Delete Selected" or highlight + `Delete` key |
+| Delete individual | Right-click → Delete This File |
+| Multi-select | `Ctrl+Click` or `Shift+Click` then `Delete` |
+| Open/inspect | Right-click → Open File / Open Folder |
+
+**Smart filtering** — automatically skips system files (.dll, .sys, .dat, etc.) and protected directories (Windows, System32, Program Files).
 
 ## How it works
 
@@ -138,6 +115,9 @@ quickfind i                           # shorthand
 ┌─────────────────────────────────────────────────────────┐
 │  SEARCH ENGINE                                           │
 │  FTS5 MATCH → filter → sort → results in <1ms          │
+│                                                          │
+│  DUPLICATE FINDER                                        │
+│  Group by size → hash candidates → group by hash        │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -155,9 +135,10 @@ quickfind i                           # shorthand
 ```
 quickfind/
 ├── quickfind.py        # CLI entry point (launches GUI if no args)
-├── gui.py              # Tkinter GUI
+├── gui.py              # Tkinter GUI (Search + Duplicates tabs)
 ├── indexer.py          # Filesystem crawler + SQLite storage
 ├── search.py           # Search engine (FTS5 + regex + filters + sorting)
+├── duplicates.py       # Duplicate file finder (size + hash grouping)
 ├── quickfind.ico       # App icon
 ├── installer.iss       # Inno Setup script for Windows installer
 └── .github/workflows/  # Auto-build exe on release
