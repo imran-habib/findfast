@@ -30,6 +30,19 @@ def format_size(size: int) -> str:
     return f"{size:.1f} PB"
 
 
+# Sort options
+SORT_OPTIONS = {
+    "relevance": None,  # default FTS ranking
+    "name_asc": lambda r: r.name.lower(),
+    "name_desc": lambda r: r.name.lower(),
+    "size_asc": lambda r: r.size,
+    "size_desc": lambda r: r.size,
+    "modified_newest": lambda r: -r.modified,
+    "modified_oldest": lambda r: r.modified,
+    "type": lambda r: r.ext.lower(),
+}
+
+
 def search(
     query: str,
     db_path: str = DEFAULT_DB,
@@ -41,6 +54,9 @@ def search(
     files_only: bool = False,
     path_filter: Optional[str] = None,
     use_regex: bool = False,
+    sort_by: str = "relevance",
+    modified_after: Optional[float] = None,
+    modified_before: Optional[float] = None,
 ) -> dict:
     """
     Search indexed files.
@@ -56,12 +72,12 @@ def search(
         files_only: Only return files
         path_filter: Filter results where path contains this string
         use_regex: Treat query as regex instead of FTS
-
-    Returns:
-        Dict with results and timing info.
+        sort_by: Sort order (relevance, name_asc, name_desc, size_asc, size_desc, modified_newest, modified_oldest, type)
+        modified_after: Only files modified after this timestamp
+        modified_before: Only files modified before this timestamp
     """
     if not os.path.exists(db_path):
-        return {"results": [], "count": 0, "error": "No index found. Run: findfast index <path>"}
+        return {"results": [], "count": 0, "error": "No index found. Run: quickfind index <path>"}
 
     start = time.perf_counter()
     conn = get_db(db_path)
@@ -70,7 +86,6 @@ def search(
     results = []
 
     if use_regex:
-        # Regex search against the files table directly
         rows = conn.execute(
             "SELECT name, path, ext, size, modified, is_dir FROM files"
         ).fetchall()
@@ -81,19 +96,16 @@ def search(
         for row in rows:
             if pattern.search(row["name"]) or pattern.search(row["path"]):
                 results.append(row)
-                if len(results) >= limit:
+                if len(results) >= limit * 3:
                     break
     elif query.strip() in ("*", ""):
-        # List all files (no FTS needed)
         rows = conn.execute(
             "SELECT name, path, ext, size, modified, is_dir FROM files LIMIT ?", (limit * 3,)
         ).fetchall()
         results = rows
     else:
-        # FTS5 search — add * for prefix matching if no special syntax
         fts_query = query
         if not any(c in query for c in ('"', '*', 'OR', 'AND', 'NOT')):
-            # Auto prefix match: "foo" becomes "foo*"
             terms = query.split()
             fts_query = " ".join(f"{t}*" for t in terms)
 
@@ -105,7 +117,7 @@ def search(
                 WHERE files_fts MATCH ?
                 ORDER BY rank
                 LIMIT ?
-            """, (fts_query, limit * 3)).fetchall()  # fetch extra for post-filtering
+            """, (fts_query, limit * 3)).fetchall()
         except sqlite3.OperationalError as e:
             return {"results": [], "count": 0, "error": f"Search error: {e}"}
         results = rows
@@ -125,6 +137,10 @@ def search(
             continue
         if path_filter and path_filter.lower() not in row["path"].lower():
             continue
+        if modified_after is not None and (row["modified"] or 0) < modified_after:
+            continue
+        if modified_before is not None and (row["modified"] or 0) > modified_before:
+            continue
         filtered.append(SearchResult(
             name=row["name"],
             path=row["path"],
@@ -133,8 +149,14 @@ def search(
             modified=row["modified"] or 0,
             is_dir=bool(row["is_dir"]),
         ))
-        if len(filtered) >= limit:
-            break
+
+    # Apply sorting
+    sort_key = SORT_OPTIONS.get(sort_by)
+    if sort_key:
+        reverse = sort_by.endswith("_desc") or sort_by == "modified_newest"
+        filtered.sort(key=sort_key, reverse=reverse)
+
+    filtered = filtered[:limit]
 
     elapsed = time.perf_counter() - start
 

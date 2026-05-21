@@ -127,7 +127,7 @@ class QuickFindGUI:
                                     width=3, command=self._toggle_theme)
         self.theme_btn.pack(side=tk.RIGHT)
 
-        # Filter frame
+        # Filter frame - Row 1
         filters = ttk.Frame(self.root, padding=(10, 0))
         filters.pack(fill=tk.X)
 
@@ -136,16 +136,49 @@ class QuickFindGUI:
         ttk.Entry(filters, textvariable=self.ext_var, width=8).pack(side=tk.LEFT, padx=(2, 10))
         self.ext_var.trace_add("write", self._on_search)
 
-        self.files_only_var = tk.BooleanVar()
-        ttk.Checkbutton(filters, text="Files only", variable=self.files_only_var,
-                        command=self._on_search_btn).pack(side=tk.LEFT, padx=5)
-
-        self.dirs_only_var = tk.BooleanVar()
-        ttk.Checkbutton(filters, text="Dirs only", variable=self.dirs_only_var,
-                        command=self._on_search_btn).pack(side=tk.LEFT, padx=5)
+        ttk.Label(filters, text="Sort:").pack(side=tk.LEFT, padx=(5, 0))
+        self.sort_var = tk.StringVar(value="relevance")
+        sort_combo = ttk.Combobox(filters, textvariable=self.sort_var, width=14, state="readonly",
+                                  values=["relevance", "name_asc", "name_desc",
+                                          "size_asc", "size_desc",
+                                          "modified_newest", "modified_oldest", "type"])
+        sort_combo.pack(side=tk.LEFT, padx=(2, 10))
+        sort_combo.bind("<<ComboboxSelected>>", self._on_search)
 
         ttk.Button(filters, text="Index Folder...", command=self._index_folder).pack(side=tk.RIGHT)
         ttk.Button(filters, text="Re-index", command=self._reindex).pack(side=tk.RIGHT, padx=5)
+
+        # Filter frame - Row 2
+        filters2 = ttk.Frame(self.root, padding=(10, 3))
+        filters2.pack(fill=tk.X)
+
+        self.files_only_var = tk.BooleanVar()
+        ttk.Checkbutton(filters2, text="Files only", variable=self.files_only_var,
+                        command=self._on_search_btn).pack(side=tk.LEFT, padx=5)
+
+        self.dirs_only_var = tk.BooleanVar()
+        ttk.Checkbutton(filters2, text="Dirs only", variable=self.dirs_only_var,
+                        command=self._on_search_btn).pack(side=tk.LEFT, padx=5)
+
+        ttk.Separator(filters2, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8)
+
+        ttk.Label(filters2, text="Size:").pack(side=tk.LEFT)
+        self.size_filter_var = tk.StringVar(value="any")
+        size_combo = ttk.Combobox(filters2, textvariable=self.size_filter_var, width=10, state="readonly",
+                                  values=["any", "<1 KB", "<1 MB", "<10 MB", "<100 MB",
+                                          ">1 KB", ">1 MB", ">10 MB", ">100 MB"])
+        size_combo.pack(side=tk.LEFT, padx=(2, 10))
+        size_combo.bind("<<ComboboxSelected>>", self._on_search)
+
+        ttk.Separator(filters2, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8)
+
+        ttk.Label(filters2, text="Modified:").pack(side=tk.LEFT)
+        self.date_filter_var = tk.StringVar(value="any")
+        date_combo = ttk.Combobox(filters2, textvariable=self.date_filter_var, width=12, state="readonly",
+                                  values=["any", "today", "yesterday", "this week",
+                                          "this month", "this year", "older than year"])
+        date_combo.pack(side=tk.LEFT, padx=(2, 10))
+        date_combo.bind("<<ComboboxSelected>>", self._on_search)
 
         # Progress frame
         progress_frame = ttk.Frame(self.root, padding=(10, 5))
@@ -173,14 +206,16 @@ class QuickFindGUI:
         tree_frame = ttk.Frame(self.root, padding=(10, 5))
         tree_frame.pack(fill=tk.BOTH, expand=True)
 
-        cols = ("name", "size", "path")
+        cols = ("name", "size", "modified", "path")
         self.tree = ttk.Treeview(tree_frame, columns=cols, show="headings")
-        self.tree.heading("name", text="Name")
-        self.tree.heading("size", text="Size")
-        self.tree.heading("path", text="Path")
-        self.tree.column("name", width=250)
-        self.tree.column("size", width=80, anchor=tk.E)
-        self.tree.column("path", width=500)
+        self.tree.heading("name", text="Name ↕", command=lambda: self._sort_column("name"))
+        self.tree.heading("size", text="Size ↕", command=lambda: self._sort_column("size"))
+        self.tree.heading("modified", text="Modified ↕", command=lambda: self._sort_column("modified"))
+        self.tree.heading("path", text="Path ↕", command=lambda: self._sort_column("path"))
+        self.tree.column("name", width=220)
+        self.tree.column("size", width=70, anchor=tk.E)
+        self.tree.column("modified", width=130)
+        self.tree.column("path", width=400)
 
         scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar.set)
@@ -201,13 +236,30 @@ class QuickFindGUI:
         # Keyboard shortcuts
         self.root.bind("<Control-t>", lambda e: self._toggle_theme())
         self.root.bind("<Escape>", lambda e: self._minimize_to_tray())
+        self.root.bind("<Return>", lambda e: self._open_file())
+        self.root.bind("<Control-c>", self._keyboard_copy)
+
+        # Track sort state for column click toggling
+        self._sort_reverse = {}
 
     def _apply_theme(self):
         colors = THEMES[self.theme]
         style = ttk.Style()
 
+        # Whole window background
         self.root.configure(bg=colors["bg"])
 
+        # Style all ttk widgets
+        style.configure(".", background=colors["bg"], foreground=colors["fg"])
+        style.configure("TFrame", background=colors["bg"])
+        style.configure("TLabel", background=colors["bg"], foreground=colors["fg"])
+        style.configure("TButton", background=colors["bg"])
+        style.configure("TCheckbutton", background=colors["bg"], foreground=colors["fg"])
+        style.configure("TEntry", fieldbackground=colors["entry_bg"], foreground=colors["fg"])
+        style.configure("TCombobox", fieldbackground=colors["entry_bg"], foreground=colors["fg"])
+        style.configure("TProgressbar", background=colors["select_bg"])
+
+        # Treeview
         style.configure("Treeview",
                         background=colors["tree_bg"],
                         foreground=colors["tree_fg"],
@@ -216,6 +268,9 @@ class QuickFindGUI:
                         background=colors["bg"],
                         foreground=colors["fg"])
         style.map("Treeview", background=[("selected", colors["select_bg"])])
+
+        # Status labels
+        style.configure("Status.TLabel", background=colors["bg"], foreground=colors["status_fg"])
 
         self.theme_btn.config(text="🌙" if self.theme == "light" else "☀️")
 
@@ -280,6 +335,46 @@ class QuickFindGUI:
         self.entry.focus()
 
     # --- Context Menu ---
+    def _sort_column(self, col):
+        """Sort treeview by clicking column header."""
+        reverse = self._sort_reverse.get(col, False)
+        items = [(self.tree.set(k, col), k) for k in self.tree.get_children("")]
+
+        # Smart sort: numeric for size, otherwise alphabetical
+        if col == "size":
+            def size_key(item):
+                val = item[0].strip()
+                if not val:
+                    return 0
+                parts = val.split()
+                try:
+                    num = float(parts[0])
+                    units = {"B": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
+                    return num * units.get(parts[1], 1) if len(parts) > 1 else num
+                except (ValueError, IndexError):
+                    return 0
+            items.sort(key=size_key, reverse=reverse)
+        else:
+            items.sort(key=lambda t: t[0].lower(), reverse=reverse)
+
+        for index, (_, k) in enumerate(items):
+            self.tree.move(k, "", index)
+
+        self._sort_reverse[col] = not reverse
+
+        # Update header arrows
+        for c in ("name", "size", "modified", "path"):
+            arrow = ""
+            if c == col:
+                arrow = " ▼" if reverse else " ▲"
+            self.tree.heading(c, text=c.capitalize() + arrow)
+
+    def _keyboard_copy(self, event):
+        """Ctrl+C copies path if tree has focus, otherwise normal copy."""
+        if self.tree.selection():
+            self._copy_path()
+            return "break"
+
     def _show_context_menu(self, event):
         item = self.tree.identify_row(event.y)
         if item:
@@ -292,7 +387,7 @@ class QuickFindGUI:
             return ""
         values = self.tree.item(item[0])["values"]
         name = str(values[0]).replace("📁 ", "")
-        folder = str(values[2])
+        folder = str(values[3])
         return os.path.join(folder, name)
 
     def _open_file(self):
@@ -424,12 +519,23 @@ class QuickFindGUI:
         if ext and not ext.startswith("."):
             ext = "." + ext
 
+        # Parse size filter
+        min_size, max_size = self._parse_size_filter()
+
+        # Parse date filter
+        modified_after, modified_before = self._parse_date_filter()
+
         result = search(
             query=query,
             limit=100,
             ext_filter=ext or None,
             files_only=self.files_only_var.get(),
             dirs_only=self.dirs_only_var.get(),
+            sort_by=self.sort_var.get(),
+            min_size=min_size,
+            max_size=max_size,
+            modified_after=modified_after,
+            modified_before=modified_before,
         )
 
         self.tree.delete(*self.tree.get_children())
@@ -441,13 +547,48 @@ class QuickFindGUI:
         for r in result["results"]:
             icon = "📁 " if r.is_dir else ""
             size = "" if r.is_dir else format_size(r.size)
+            from datetime import datetime
+            mod_date = datetime.fromtimestamp(r.modified).strftime("%Y-%m-%d %H:%M") if r.modified else ""
             self.tree.insert("", tk.END, values=(
-                f"{icon}{r.name}", size, os.path.dirname(r.path)
+                f"{icon}{r.name}", size, mod_date, os.path.dirname(r.path)
             ))
 
         self._result_count = result["count"]
         self._update_title()
         self.status_var.set(f"{result['count']} results in {result['elapsed_ms']}ms")
+
+    def _parse_size_filter(self):
+        """Convert size filter dropdown to min/max bytes."""
+        val = self.size_filter_var.get()
+        sizes = {"1 KB": 1024, "1 MB": 1024**2, "10 MB": 10*1024**2, "100 MB": 100*1024**2}
+        if val.startswith("<"):
+            return None, sizes.get(val[1:], None)
+        elif val.startswith(">"):
+            return sizes.get(val[1:], None), None
+        return None, None
+
+    def _parse_date_filter(self):
+        """Convert date filter dropdown to timestamps."""
+        import datetime
+        val = self.date_filter_var.get()
+        now = time.time()
+        day = 86400
+
+        if val == "today":
+            start_of_today = datetime.datetime.now().replace(hour=0, minute=0, second=0).timestamp()
+            return start_of_today, None
+        elif val == "yesterday":
+            start_of_today = datetime.datetime.now().replace(hour=0, minute=0, second=0).timestamp()
+            return start_of_today - day, start_of_today
+        elif val == "this week":
+            return now - 7 * day, None
+        elif val == "this month":
+            return now - 30 * day, None
+        elif val == "this year":
+            return now - 365 * day, None
+        elif val == "older than year":
+            return None, now - 365 * day
+        return None, None
 
     def _on_search_btn(self):
         self._on_search()

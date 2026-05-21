@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-findfast - Instant file search for Windows & Linux.
+QuickFind - Instant file search for Windows & Linux.
 Like 'Everything' but cross-platform and in Python.
 """
 import argparse
@@ -92,12 +92,12 @@ def cmd_search(args):
 
 def cmd_interactive(args):
     """Interactive real-time search mode."""
-    print(f"{c('findfast', BOLD)} interactive mode (type to search, Ctrl+C to exit)\n")
+    print(f"{c('QuickFind', BOLD)} interactive mode (type to search, Ctrl+C to exit)\n")
 
     # Check if index exists
     stats = get_stats(args.db)
     if "error" in stats:
-        print(f"  {stats['error']} Run: findfast index <path>")
+        print(f"  {stats['error']} Run: quickfind index <path>")
         return
     print(f"  Index: {stats['total_entries']:,} entries ({stats['files']:,} files, {stats['directories']:,} dirs)")
     print(f"  {c('Type to search...', DIM)}\n")

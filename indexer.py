@@ -8,7 +8,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional, Callable
 
-DEFAULT_DB = os.path.join(os.path.expanduser("~"), ".findfast.db")
+DEFAULT_DB = os.path.join(os.path.expanduser("~"), ".quickfind.db")
 
 SKIP_DIRS = {
     "$Recycle.Bin", "System Volume Information", "Windows", "ProgramData",

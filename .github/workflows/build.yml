@@ -22,7 +22,7 @@ jobs:
         run: pip install pyinstaller pystray keyboard Pillow
 
       - name: Build EXE
-        run: pyinstaller --onefile --noconsole --name QuickFind --icon=quickfind.ico --add-data "quickfind.ico;." findfast.py
+        run: pyinstaller --onefile --noconsole --name QuickFind --icon=quickfind.ico --add-data "quickfind.ico;." quickfind.py
 
       - name: Build Installer
         run: |
@@ -55,7 +55,7 @@ jobs:
         run: pip install pyinstaller
 
       - name: Build binary
-        run: pyinstaller --onefile --name quickfind-linux findfast.py
+        run: pyinstaller --onefile --name quickfind-linux quickfind.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
