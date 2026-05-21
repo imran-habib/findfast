@@ -18,17 +18,17 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install PyInstaller
-        run: pip install pyinstaller
+      - name: Install dependencies
+        run: pip install pyinstaller pystray keyboard Pillow
 
       - name: Build EXE
-        run: pyinstaller --onefile --noconsole --name findfast findfast.py
+        run: pyinstaller --onefile --noconsole --name QuickFind --icon=quickfind.ico --add-data "quickfind.ico;." findfast.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: findfast-windows
-          path: dist/findfast.exe
+          name: quickfind-windows
+          path: dist/QuickFind.exe
 
   build-linux:
     runs-on: ubuntu-latest
@@ -39,17 +39,17 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install PyInstaller
+      - name: Install dependencies
         run: pip install pyinstaller
 
       - name: Build binary
-        run: pyinstaller --onefile --name findfast-linux findfast.py
+        run: pyinstaller --onefile --name quickfind findfast.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: findfast-linux
-          path: dist/findfast-linux
+          name: quickfind-linux
+          path: dist/quickfind
 
   release:
     needs: [build-windows, build-linux]
@@ -58,16 +58,16 @@ jobs:
       - name: Download Windows build
         uses: actions/download-artifact@v4
         with:
-          name: findfast-windows
+          name: quickfind-windows
 
       - name: Download Linux build
         uses: actions/download-artifact@v4
         with:
-          name: findfast-linux
+          name: quickfind-linux
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            findfast.exe
-            findfast-linux
+            QuickFind.exe
+            quickfind

@@ -1,43 +1,131 @@
 """
-findfast GUI - tkinter interface with progress bar, ETA, and background auto-reindex.
+QuickFind GUI - instant file search with system tray, hotkey, themes, and more.
 """
+import json
 import os
+import subprocess
+import sys
 import threading
 import time
 import tkinter as tk
-from tkinter import ttk, filedialog
+from tkinter import ttk, filedialog, Menu
 
 from indexer import DEFAULT_DB, index_paths, get_indexed_paths
 from search import search, get_stats, format_size
 
-REINDEX_INTERVAL = 300  # seconds (5 minutes)
+REINDEX_INTERVAL = 300
+CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".quickfind_config.json")
+ICON_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "quickfind.ico")
+
+# Theme colors
+THEMES = {
+    "light": {
+        "bg": "#ffffff",
+        "fg": "#1a1a1a",
+        "entry_bg": "#ffffff",
+        "tree_bg": "#ffffff",
+        "tree_fg": "#1a1a1a",
+        "select_bg": "#0078d4",
+        "status_fg": "#666666",
+    },
+    "dark": {
+        "bg": "#1e1e1e",
+        "fg": "#d4d4d4",
+        "entry_bg": "#2d2d2d",
+        "tree_bg": "#252526",
+        "tree_fg": "#cccccc",
+        "select_bg": "#264f78",
+        "status_fg": "#808080",
+    },
+}
 
 
-class FindFastGUI:
+def load_config() -> dict:
+    try:
+        with open(CONFIG_FILE, "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def save_config(config: dict):
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(config, f)
+
+
+class QuickFindGUI:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("findfast - Instant File Search")
-        self.root.geometry("900x600")
-        self.root.minsize(600, 400)
-
+        self.config = load_config()
+        self.theme = self.config.get("theme", "light")
         self._indexing = False
         self._auto_reindex_active = True
+        self._tray_icon = None
+        self._result_count = 0
 
+        self._restore_geometry()
+        self._set_icon()
         self._build_ui()
+        self._apply_theme()
         self._check_index()
         self._start_auto_reindex()
+        self._register_hotkey()
+        self._update_title()
+
+    def _set_icon(self):
+        if os.path.exists(ICON_PATH):
+            try:
+                self.root.iconbitmap(ICON_PATH)
+            except tk.TclError:
+                pass
+
+    def _restore_geometry(self):
+        geo = self.config.get("geometry", "900x600")
+        pos = self.config.get("position", "")
+        self.root.geometry(geo + (f"+{pos}" if pos else ""))
+        self.root.minsize(600, 400)
+
+    def _save_geometry(self):
+        geo = self.root.geometry()
+        # Format: WxH+X+Y
+        parts = geo.replace("+", " ").replace("x", " ").split()
+        if len(parts) == 4:
+            self.config["geometry"] = f"{parts[0]}x{parts[1]}"
+            self.config["position"] = f"{parts[2]}+{parts[3]}"
+        save_config(self.config)
+
+    def _update_title(self):
+        title = "QuickFind"
+        if self._result_count > 0:
+            title += f" — {self._result_count} results"
+        self.root.title(title)
 
     def _build_ui(self):
+        # Menu bar
+        menubar = Menu(self.root)
+        self.root.config(menu=menubar)
+
+        view_menu = Menu(menubar, tearoff=0)
+        view_menu.add_command(label="Toggle Theme", command=self._toggle_theme, accelerator="Ctrl+T")
+        view_menu.add_separator()
+        view_menu.add_command(label="Minimize to Tray", command=self._minimize_to_tray)
+        menubar.add_cascade(label="View", menu=view_menu)
+
         # Search frame
         top = ttk.Frame(self.root, padding=10)
         top.pack(fill=tk.X)
 
-        ttk.Label(top, text="Search:").pack(side=tk.LEFT)
+        ttk.Label(top, text="🔍").pack(side=tk.LEFT)
         self.search_var = tk.StringVar()
         self.search_var.trace_add("write", self._on_search)
-        self.entry = ttk.Entry(top, textvariable=self.search_var, font=("Consolas", 12))
+        self.entry = ttk.Entry(top, textvariable=self.search_var, font=("Segoe UI", 12))
         self.entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 5))
         self.entry.focus()
+
+        # Theme toggle button
+        self.theme_btn = ttk.Button(top, text="🌙" if self.theme == "light" else "☀️",
+                                    width=3, command=self._toggle_theme)
+        self.theme_btn.pack(side=tk.RIGHT)
 
         # Filter frame
         filters = ttk.Frame(self.root, padding=(10, 0))
@@ -45,8 +133,7 @@ class FindFastGUI:
 
         ttk.Label(filters, text="Extension:").pack(side=tk.LEFT)
         self.ext_var = tk.StringVar()
-        ext_entry = ttk.Entry(filters, textvariable=self.ext_var, width=8)
-        ext_entry.pack(side=tk.LEFT, padx=(2, 10))
+        ttk.Entry(filters, textvariable=self.ext_var, width=8).pack(side=tk.LEFT, padx=(2, 10))
         self.ext_var.trace_add("write", self._on_search)
 
         self.files_only_var = tk.BooleanVar()
@@ -69,7 +156,7 @@ class FindFastGUI:
                                             maximum=100, mode="determinate")
         self.progress_bar.pack(fill=tk.X, side=tk.LEFT, expand=True, padx=(0, 10))
 
-        self.progress_label = ttk.Label(progress_frame, text="", width=50)
+        self.progress_label = ttk.Label(progress_frame, text="", width=55)
         self.progress_label.pack(side=tk.RIGHT)
 
         # Status bar
@@ -82,9 +169,12 @@ class FindFastGUI:
         self.auto_label = ttk.Label(status_frame, text="Auto-reindex: ON", foreground="green")
         self.auto_label.pack(side=tk.RIGHT)
 
-        # Results
+        # Results treeview
+        tree_frame = ttk.Frame(self.root, padding=(10, 5))
+        tree_frame.pack(fill=tk.BOTH, expand=True)
+
         cols = ("name", "size", "path")
-        self.tree = ttk.Treeview(self.root, columns=cols, show="headings")
+        self.tree = ttk.Treeview(tree_frame, columns=cols, show="headings")
         self.tree.heading("name", text="Name")
         self.tree.heading("size", text="Size")
         self.tree.heading("path", text="Path")
@@ -92,14 +182,146 @@ class FindFastGUI:
         self.tree.column("size", width=80, anchor=tk.E)
         self.tree.column("path", width=500)
 
-        scrollbar = ttk.Scrollbar(self.root, orient=tk.VERTICAL, command=self.tree.yview)
+        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar.set)
 
-        self.tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        self.tree.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        self.tree.bind("<Double-1>", self._open_location)
+        # Right-click context menu
+        self.context_menu = Menu(self.root, tearoff=0)
+        self.context_menu.add_command(label="Open File", command=self._open_file)
+        self.context_menu.add_command(label="Open Folder", command=self._open_folder)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="Copy Path", command=self._copy_path)
 
+        self.tree.bind("<Button-3>", self._show_context_menu)
+        self.tree.bind("<Double-1>", self._on_double_click)
+
+        # Keyboard shortcuts
+        self.root.bind("<Control-t>", lambda e: self._toggle_theme())
+        self.root.bind("<Escape>", lambda e: self._minimize_to_tray())
+
+    def _apply_theme(self):
+        colors = THEMES[self.theme]
+        style = ttk.Style()
+
+        self.root.configure(bg=colors["bg"])
+
+        style.configure("Treeview",
+                        background=colors["tree_bg"],
+                        foreground=colors["tree_fg"],
+                        fieldbackground=colors["tree_bg"])
+        style.configure("Treeview.Heading",
+                        background=colors["bg"],
+                        foreground=colors["fg"])
+        style.map("Treeview", background=[("selected", colors["select_bg"])])
+
+        self.theme_btn.config(text="🌙" if self.theme == "light" else "☀️")
+
+    def _toggle_theme(self):
+        self.theme = "dark" if self.theme == "light" else "light"
+        self.config["theme"] = self.theme
+        save_config(self.config)
+        self._apply_theme()
+
+    # --- System Tray ---
+    def _minimize_to_tray(self):
+        self.root.withdraw()
+        self._setup_tray()
+
+    def _setup_tray(self):
+        try:
+            import pystray
+            from PIL import Image as PILImage
+
+            if os.path.exists(ICON_PATH):
+                icon_img = PILImage.open(ICON_PATH)
+            else:
+                icon_img = PILImage.new("RGB", (64, 64), "blue")
+
+            menu = pystray.Menu(
+                pystray.MenuItem("Show QuickFind", self._restore_from_tray, default=True),
+                pystray.MenuItem("Exit", self._exit_app),
+            )
+            self._tray_icon = pystray.Icon("QuickFind", icon_img, "QuickFind", menu)
+            threading.Thread(target=self._tray_icon.run, daemon=True).start()
+        except ImportError:
+            # pystray not available, just minimize normally
+            self.root.iconify()
+
+    def _restore_from_tray(self, *args):
+        if self._tray_icon:
+            self._tray_icon.stop()
+            self._tray_icon = None
+        self.root.after(0, self.root.deiconify)
+
+    def _exit_app(self, *args):
+        if self._tray_icon:
+            self._tray_icon.stop()
+        self._auto_reindex_active = False
+        self.root.after(0, self.root.destroy)
+
+    # --- Global Hotkey ---
+    def _register_hotkey(self):
+        try:
+            import keyboard
+            keyboard.add_hotkey("ctrl+shift+f", self._hotkey_triggered)
+        except ImportError:
+            pass  # keyboard module not available
+
+    def _hotkey_triggered(self):
+        self.root.after(0, self._show_window)
+
+    def _show_window(self):
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
+        self.entry.focus()
+
+    # --- Context Menu ---
+    def _show_context_menu(self, event):
+        item = self.tree.identify_row(event.y)
+        if item:
+            self.tree.selection_set(item)
+            self.context_menu.post(event.x_root, event.y_root)
+
+    def _get_selected_path(self) -> str:
+        item = self.tree.selection()
+        if not item:
+            return ""
+        values = self.tree.item(item[0])["values"]
+        name = str(values[0]).replace("📁 ", "")
+        folder = str(values[2])
+        return os.path.join(folder, name)
+
+    def _open_file(self):
+        path = self._get_selected_path()
+        if path and os.path.exists(path):
+            if os.name == "nt":
+                os.startfile(path)
+            else:
+                subprocess.Popen(["xdg-open", path])
+
+    def _open_folder(self):
+        path = self._get_selected_path()
+        if path:
+            folder = os.path.dirname(path) if os.path.isfile(path) else path
+            if os.name == "nt":
+                subprocess.Popen(["explorer", "/select,", path])
+            else:
+                subprocess.Popen(["xdg-open", folder])
+
+    def _copy_path(self):
+        path = self._get_selected_path()
+        if path:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(path)
+
+    def _on_double_click(self, event):
+        self._open_file()
+
+    # --- Index ---
     def _check_index(self):
         stats = get_stats()
         if "error" in stats:
@@ -108,15 +330,13 @@ class FindFastGUI:
             self.status_var.set(f"Index: {stats['total_entries']:,} entries ({stats['files']:,} files, {stats['directories']:,} dirs)")
 
     def _update_progress(self, message, files_done, eta):
-        """Called from indexer thread to update progress bar."""
         def update():
-            self.progress_label.config(text=f"{message}  |  {files_done:,} files")
+            eta_str = ""
             if eta > 0:
                 mins, secs = divmod(int(eta), 60)
-                eta_str = f"{mins}m {secs}s" if mins else f"{secs}s"
-                self.progress_label.config(text=f"{message}  |  {files_done:,} files  |  ETA: {eta_str}")
-            # Pulse progress bar (we don't know exact total ahead of time)
-            if files_done > 0:
+                eta_str = f" | ETA: {mins}m {secs}s" if mins else f" | ETA: {secs}s"
+            self.progress_label.config(text=f"{message}  |  {files_done:,} files{eta_str}")
+            if files_done > 0 and self.progress_bar.cget("mode") != "indeterminate":
                 self.progress_bar.config(mode="indeterminate")
                 self.progress_bar.start(15)
         self.root.after(0, update)
@@ -128,7 +348,6 @@ class FindFastGUI:
         self._run_index([folder], incremental=False)
 
     def _reindex(self):
-        """Re-index previously indexed paths (incremental)."""
         paths = get_indexed_paths()
         if not paths:
             self.status_var.set("Nothing to re-index. Index a folder first.")
@@ -165,7 +384,6 @@ class FindFastGUI:
         self._check_index()
 
     def _start_auto_reindex(self):
-        """Background auto-reindex every REINDEX_INTERVAL seconds."""
         def auto_reindex():
             while self._auto_reindex_active:
                 time.sleep(REINDEX_INTERVAL)
@@ -175,30 +393,31 @@ class FindFastGUI:
                         self._indexing = True
                         self.root.after(0, lambda: self.auto_label.config(
                             text="Auto-reindex: running...", foreground="orange"))
-
                         result = index_paths(paths, callback=self._update_progress, incremental=True)
 
-                        def done():
+                        def done(r=result):
                             self._indexing = False
                             self.progress_bar.stop()
                             self.progress_bar.config(mode="determinate")
                             self.progress_var.set(100)
                             self.auto_label.config(text="Auto-reindex: ON", foreground="green")
                             self.progress_label.config(
-                                text=f"Auto-update: +{result['new_files']} new, "
-                                     f"{result['updated_files']} modified, "
-                                     f"-{result['removed_files']} removed")
+                                text=f"Auto-update: +{r['new_files']} new, "
+                                     f"{r['updated_files']} modified, "
+                                     f"-{r['removed_files']} removed")
                             self._check_index()
 
                         self.root.after(0, done)
 
-        t = threading.Thread(target=auto_reindex, daemon=True)
-        t.start()
+        threading.Thread(target=auto_reindex, daemon=True).start()
 
+    # --- Search ---
     def _on_search(self, *args):
         query = self.search_var.get().strip()
         if not query:
             self.tree.delete(*self.tree.get_children())
+            self._result_count = 0
+            self._update_title()
             return
 
         ext = self.ext_var.get().strip()
@@ -226,31 +445,28 @@ class FindFastGUI:
                 f"{icon}{r.name}", size, os.path.dirname(r.path)
             ))
 
+        self._result_count = result["count"]
+        self._update_title()
         self.status_var.set(f"{result['count']} results in {result['elapsed_ms']}ms")
 
     def _on_search_btn(self):
         self._on_search()
 
-    def _open_location(self, event):
-        item = self.tree.selection()
-        if not item:
-            return
-        values = self.tree.item(item[0])["values"]
-        path = values[2]
-        if os.path.isdir(path):
-            os.startfile(path) if os.name == "nt" else os.system(f'xdg-open "{path}"')
-
+    # --- Lifecycle ---
     def run(self):
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.mainloop()
 
     def _on_close(self):
+        self._save_geometry()
         self._auto_reindex_active = False
+        if self._tray_icon:
+            self._tray_icon.stop()
         self.root.destroy()
 
 
 def launch_gui():
-    app = FindFastGUI()
+    app = QuickFindGUI()
     app.run()
 
 

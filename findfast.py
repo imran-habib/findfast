@@ -153,8 +153,8 @@ def cmd_stats(args):
 
 def main():
     p = argparse.ArgumentParser(
-        prog="findfast",
-        description="Instant file search for Windows & Linux",
+        prog="quickfind",
+        description="QuickFind - Instant file search for Windows & Linux",
     )
     p.add_argument("--db", default=DEFAULT_DB, help="Database path")
     sub = p.add_subparsers(dest="command")
